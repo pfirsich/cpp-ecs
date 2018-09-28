@@ -143,15 +143,7 @@ private:
     std::vector<ComponentMask> mComponentMasks;
 
     template <typename ComponentType>
-    ComponentPool<ComponentType>& getPool() {
-        auto compId = componentId::get<ComponentType>();
-        if(mPools.size() < compId + 1) {
-            mPools.resize(compId + 1);
-            mPools[compId].reset(new ComponentPool<ComponentType>());
-        }
-        assert(mPools[compId]);
-        return *static_cast<ComponentPool<ComponentType>*>(mPools[compId]);
-    }
+    ComponentPool<ComponentType>& getPool();
 };
 
 class Entity {
@@ -223,7 +215,6 @@ inline bool World::hasComponents(EntityId entityId, ComponentMask mask) const {
     return (mComponentMasks[entityId] & mask) == mask;
 }
 
-
 template <typename... Args>
 bool World::hasComponents(EntityId entityId) const {
     return hasComponents(entityId, componentMask<Args...>());
@@ -241,6 +232,17 @@ void World::tickSystem(FuncType tickFunc, FuncArgs... funcArgs) {
     for (auto e : entitiesWith<Components...>()) {
         tickFunc(funcArgs..., e.get<Components>()...);
     }
+}
+
+template <typename ComponentType>
+ComponentPool<ComponentType>& World::getPool() {
+    auto compId = componentId::get<ComponentType>();
+    if (mPools.size() < compId + 1) {
+        mPools.resize(compId + 1);
+        mPools[compId].reset(new ComponentPool<ComponentType>());
+    }
+    assert(mPools[compId]);
+    return *static_cast<ComponentPool<ComponentType>*>(mPools[compId].get());
 }
 
 // Entity implementation
