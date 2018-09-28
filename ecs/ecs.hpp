@@ -7,14 +7,6 @@
 
 namespace ecs {
 
-/*
-    Problems:
-    Entity ID Reuse
-    remove entity und components
-    updateFunc type validation
-    getComponent specialization für const component types hinzufügen
-*/
-
 using ComponentMask = uint64_t;
 static_assert(std::is_unsigned<ComponentMask>::value, "ComponentMask type must be unsigned");
 static const ComponentMask ALL_COMPONENTS = std::numeric_limits<ComponentMask>::max();
@@ -24,32 +16,20 @@ using EntityId = uint32_t;
 using IndexType = size_t;
 static const IndexType MAX_INDEX = std::numeric_limits<IndexType>::max();
 
-class BaseComponent {
-protected:
-    static ComponentMask idCounter;
-};
+namespace componentId {
+    static ComponentMask idCounter = 0;
 
-ComponentMask BaseComponent::idCounter = 0;
-
-template <typename ComponentType>
-class Component : BaseComponent {
-    static std::vector<ComponentType> pool;
-
-    static ComponentMask getId() {
-        static auto id = BaseComponent::idCounter++;
+    template <typename ComponentType>
+    ComponentMask get() {
+        static auto id = idCounter++;
         assert(id <= std::numeric_limits<ComponentMask>::digits);
         return id;
     }
-};
-
-template <typename ComponentType>
-ComponentMask componentId() {
-    return Component<typename std::remove_const<ComponentType>::type>::getId();
 }
 
 template <typename ComponentType>
 ComponentMask componentMask() {
-    return 1 << componentId<ComponentType>();
+    return 1 << componentId::get<ComponentType>();
 }
 
 template <typename FirstComponentType, typename... Args>
@@ -57,10 +37,14 @@ ComponentMask componentMask() {
     return componentMask<FirstComponentType>() | componentMask<Args...>();
 }
 
+struct ComponentPoolBase {
+    virtual ~ComponentPoolBase() = default;
+};
+
 template<typename ComponentType>
-class ComponentPool {
+class ComponentPool : ComponentPoolBase {
 public:
-    ComponentPool() = default;
+    ComponentPool() : mComponentId(componentId::get<ComponentType>()) {}
     ~ComponentPool() = default;
     ComponentPool(const ComponentPool& other) = delete;
     ComponentPool& operator=(const ComponentPool& other) = delete;
@@ -84,6 +68,7 @@ public:
     }
 
 private:
+    ComponentMask mComponentId;
     std::vector<ComponentType> mComponents;
     std::vector<IndexType> mIndexMap;
     static const IndexType INVALID_INDEX = MAX_INDEX;
@@ -143,9 +128,6 @@ public:
     template <typename ComponentType>
     ComponentType& getComponent(EntityId entityId);
 
-    template <typename ... Types>
-    struct TypeTuple;
-
     template <typename... Components, typename... FuncArgs, typename FuncType>
     void tickSystem(FuncType tickFunc, FuncArgs... funcArgs);
 
@@ -153,12 +135,23 @@ public:
 
     template<typename... Args>
     EntityList entitiesWith() {
-        return EntityList(*this, componentMask<Args>());
+        return EntityList(*this, componentMask<Args...>());
     }
 
 private:
-    template<typename ComponentType> ComponentPool<ComponentType> mPool;
+    std::vector<std::unique_ptr<ComponentPoolBase>> mPools;
     std::vector<ComponentMask> mComponentMasks;
+
+    template <typename ComponentType>
+    ComponentPool<ComponentType>& getPool() {
+        auto compId = componentId::get<ComponentType>();
+        if(mPools.size() < compId + 1) {
+            mPools.resize(compId + 1);
+            mPools[compId].reset(new ComponentPool<ComponentType>());
+        }
+        assert(mPools[compId]);
+        return *static_cast<ComponentPool<ComponentType>*>(mPools[compId]);
+    }
 };
 
 class Entity {
@@ -177,13 +170,13 @@ public:
     ComponentType& get();
 
     EntityId getId() const { return mId; }
-    World* getWorld() const { return mWorld; }
+    World& getWorld() const { return mWorld; }
 
 private:
-    World* mWorld;
+    World& mWorld;
     EntityId mId;
 
-    Entity(World* world, EntityId id) : mWorld(world), mId(id) {}
+    Entity(World& world, EntityId id) : mWorld(world), mId(id) {}
 
     friend Entity World::entity();
     friend Entity World::entity(EntityId);
@@ -208,12 +201,12 @@ inline Entity World::EntityIterator::operator*() const {
 
 inline Entity World::entity() {
     mComponentMasks.push_back(0);
-    return Entity(this, mComponentMasks.size() - 1);
+    return Entity(*this, mComponentMasks.size() - 1);
 }
 
 inline Entity World::entity(EntityId entityId) {
     assert(mComponentMasks.size() >= entityId); // entity exists
-    return Entity(this, entityId);
+    return Entity(*this, entityId);
 }
 
 template <typename ComponentType, typename... Args>
@@ -222,7 +215,7 @@ ComponentType& World::addComponent(EntityId entityId, Args&&... args) {
     assert(mComponentMasks.size() > entityId);
     assert(!hasComponents<ComponentType>());
     mComponentMasks[entityId] |= componentMask<ComponentType>();
-    return mPool<ComponentType>.add(entityId, std::forward<Args>(args)...);
+    return getPool<ComponentType>().add(entityId, std::forward<Args>(args)...);
 }
 
 inline bool World::hasComponents(EntityId entityId, ComponentMask mask) const {
@@ -239,12 +232,13 @@ bool World::hasComponents(EntityId entityId) const {
 template <typename ComponentType>
 ComponentType& World::getComponent(EntityId entityId) {
     assert(hasComponents<ComponentType>(entityId));
-    return mPool<ComponentType>.get(entityId);
+    return getPool<ComponentType>().get(entityId);
 }
 
 template <typename... Components, typename... FuncArgs, typename FuncType>
 void World::tickSystem(FuncType tickFunc, FuncArgs... funcArgs) {
-    for (auto e : entitiesWith<Components>()) {
+    static_assert(std::is_same<FuncType, void(FuncArgs..., Components...)>::value);
+    for (auto e : entitiesWith<Components...>()) {
         tickFunc(funcArgs..., e.get<Components>()...);
     }
 }
@@ -252,17 +246,17 @@ void World::tickSystem(FuncType tickFunc, FuncArgs... funcArgs) {
 // Entity implementation
 template <typename ComponentType, typename... Args>
 ComponentType& Entity::add(Args&&... args) {
-    return mWorld->addComponent(mId, std::forward<Args>(args)...);
+    return mWorld.addComponent<ComponentType>(mId, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 bool Entity::has() const {
-    return mWorld->hasComponents<Args...>(mId);
+    return mWorld.hasComponents<Args...>(mId);
 }
 
 template <typename ComponentType>
 ComponentType& Entity::get() {
-    return mWorld->getComponent<ComponentType>(mId);
+    return mWorld.getComponent<ComponentType>(mId);
 }
 
 } // namespace ecs
