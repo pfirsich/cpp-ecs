@@ -27,14 +27,9 @@ namespace componentId {
     }
 }
 
-template <typename ComponentType>
+template <typename... Args>
 ComponentMask componentMask() {
-    return 1 << componentId::get<ComponentType>();
-}
-
-template <typename FirstComponentType, typename... Args>
-ComponentMask componentMask() {
-    return componentMask<FirstComponentType>() | componentMask<Args...>();
+    return (... | (1ull << componentId::get<Args>()));
 }
 
 struct ComponentPoolBase {
@@ -42,7 +37,7 @@ struct ComponentPoolBase {
 };
 
 template<typename ComponentType>
-class ComponentPool : ComponentPoolBase {
+class ComponentPool : public ComponentPoolBase {
 public:
     ComponentPool() : mComponentId(componentId::get<ComponentType>()) {}
     ~ComponentPool() = default;
@@ -63,7 +58,7 @@ public:
     }
 
     ComponentType& get(EntityId entityId) {
-        assert(mIndexMap.size() > entityId && mIndexMap[entityId] != INVALID_INDEX && mComponents > mIndexMap[entityId]);
+        assert(mIndexMap.size() > entityId && mIndexMap[entityId] != INVALID_INDEX && mComponents.size() > mIndexMap[entityId]);
         return mComponents[mIndexMap[entityId]];
     }
 
@@ -205,7 +200,7 @@ template <typename ComponentType, typename... Args>
 ComponentType& World::addComponent(EntityId entityId, Args&&... args) {
     static_assert(std::is_default_constructible<ComponentType>::value, "Component types must be default constructible.");
     assert(mComponentMasks.size() > entityId);
-    assert(!hasComponents<ComponentType>());
+    assert(!hasComponents<ComponentType>(entityId));
     mComponentMasks[entityId] |= componentMask<ComponentType>();
     return getPool<ComponentType>().add(entityId, std::forward<Args>(args)...);
 }
@@ -223,12 +218,12 @@ bool World::hasComponents(EntityId entityId) const {
 template <typename ComponentType>
 ComponentType& World::getComponent(EntityId entityId) {
     assert(hasComponents<ComponentType>(entityId));
-    return getPool<ComponentType>().get(entityId);
+    return getPool<std::remove_const<ComponentType>::type>().get(entityId);
 }
 
 template <typename... Components, typename... FuncArgs, typename FuncType>
 void World::tickSystem(FuncType tickFunc, FuncArgs... funcArgs) {
-    static_assert(std::is_same<FuncType, void(FuncArgs..., Components...)>::value);
+    //static_assert(std::is_same<FuncType, void(FuncArgs..., Components...)>::value);
     for (auto e : entitiesWith<Components...>()) {
         tickFunc(funcArgs..., e.get<Components>()...);
     }
@@ -236,10 +231,10 @@ void World::tickSystem(FuncType tickFunc, FuncArgs... funcArgs) {
 
 template <typename ComponentType>
 ComponentPool<ComponentType>& World::getPool() {
-    auto compId = componentId::get<ComponentType>();
+    const auto compId = static_cast<unsigned int>(componentId::get<ComponentType>());
     if (mPools.size() < compId + 1) {
         mPools.resize(compId + 1);
-        mPools[compId].reset(new ComponentPool<ComponentType>());
+        mPools[compId].reset(static_cast<ComponentPoolBase*>(new ComponentPool<ComponentType>()));
     }
     assert(mPools[compId]);
     return *static_cast<ComponentPool<ComponentType>*>(mPools[compId].get());

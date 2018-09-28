@@ -4,11 +4,15 @@
 
 struct Position {
     float x, y;
+
+    Position() : x(), y() {}
     Position(float x, float y) : x(x), y(y) {}
 };
 
 struct Velocity {
     float x, y;
+
+    Velocity() : x(), y() {}
     Velocity(float x, float y) : x(x), y(y) {}
 };
 
@@ -20,7 +24,7 @@ void physicsSystem(float dt, Position& p, const Velocity& v) {
 void tickPhysicsSystem(ecs::World& world, float dt) {
     for (auto e : world.entitiesWith<Position, Velocity>()) {
         auto& p = e.get<Position>();
-        const auto& v = e.get<const Velocity>();
+        const auto& v = e.get<Velocity>();
         p.x += v.x * dt;
         p.y += v.y * dt;
     }
