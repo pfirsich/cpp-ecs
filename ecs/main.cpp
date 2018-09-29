@@ -24,7 +24,7 @@ void physicsSystem(float dt, Position& p, const Velocity& v) {
 void tickPhysicsSystem(ecs::World& world, float dt) {
     for (auto e : world.entitiesWith<Position, Velocity>()) {
         auto& p = e.get<Position>();
-        const auto& v = e.get<Velocity>();
+        const auto& v = e.get<const Velocity>();
         p.x += v.x * dt;
         p.y += v.y * dt;
     }
@@ -36,6 +36,5 @@ int main(int argc, char** argv) {
     e.add<Position>(0.0f, 0.0f);
     e.add<Velocity>(0.0f, 0.0f);
     //tickPhysicsSystem(world, 1.0f);
-    //world.tickSystem<Position, const Velocity, float, void(float, Position&, const Velocity&)>(physicsSystem, 1.0f);
     world.tickSystem<Position, const Velocity>(physicsSystem, 1.0f);
 }

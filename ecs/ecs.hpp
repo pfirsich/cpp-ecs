@@ -4,6 +4,9 @@
 #include <limits>
 #include <vector>
 #include <type_traits>
+#include <thread>
+#include <atomic>
+#include <algorithm>
 
 namespace ecs {
 
@@ -126,6 +129,8 @@ public:
     template <typename... Components, typename... FuncArgs, typename FuncType>
     void tickSystem(FuncType tickFunc, FuncArgs... funcArgs);
 
+    void finishSystems();
+
     auto getEntityCount() const { return mComponentMasks.size(); }
 
     template<typename... Args>
@@ -134,11 +139,29 @@ public:
     }
 
 private:
+    struct RunningSystem {
+        ComponentMask readMask;
+        ComponentMask writeMask;
+        std::thread thread;
+        std::atomic<bool> finished;
+
+        RunningSystem(ComponentMask readMask, ComponentMask writeMask) :
+            readMask(readMask), writeMask(writeMask), finished(false) {}
+    };
+
     std::vector<std::unique_ptr<ComponentPoolBase>> mPools;
     std::vector<ComponentMask> mComponentMasks;
+    std::vector<std::unique_ptr<RunningSystem>> mRunningSystems;
 
     template <typename ComponentType>
     ComponentPool<ComponentType>& getPool();
+
+    static bool systemFinished(const std::unique_ptr<RunningSystem>& system);
+    void eraseFinishedSystems();
+    void waitForSystems(ComponentMask readMask, ComponentMask writeMask);
+
+    template <typename... Components, typename... FuncArgs, typename FuncType>
+    static void systemThreadFunction(FuncType tickFunc, World* world, RunningSystem* system, FuncArgs... funcArgs);
 };
 
 class Entity {
@@ -221,12 +244,68 @@ ComponentType& World::getComponent(EntityId entityId) {
     return getPool<std::remove_const<ComponentType>::type>().get(entityId);
 }
 
+template <bool isConst, typename ComponentType>
+ComponentMask _constFilteredComponentMask() {
+    if constexpr(std::is_const<ComponentType>::value == isConst) {
+        return componentMask<ComponentType>();
+    } else {
+        return 0;
+    }
+}
+
+template <bool isConst, typename... Args>
+ComponentMask constFilteredComponentMask() {
+    return (... | _constFilteredComponentMask<isConst, Args>());
+}
+
 template <typename... Components, typename... FuncArgs, typename FuncType>
-void World::tickSystem(FuncType tickFunc, FuncArgs... funcArgs) {
-    //static_assert(std::is_same<FuncType, void(FuncArgs..., Components...)>::value);
-    for (auto e : entitiesWith<Components...>()) {
+void World::systemThreadFunction(FuncType tickFunc, World* world, RunningSystem* system, FuncArgs... funcArgs) {
+    for (auto e : world->entitiesWith<Components...>()) {
         tickFunc(funcArgs..., e.get<Components>()...);
     }
+    system->finished = true;
+}
+
+template <typename... Components, typename... FuncArgs, typename FuncType>
+void World::tickSystem(FuncType tickFunc, FuncArgs... funcArgs) {
+    static_assert(!(... || std::is_reference<Components>::value), "Component types must not be references");
+    static_assert(std::is_same<FuncType, void(*)(FuncArgs..., Components&...)>::value, "Tick function has invalid signature");
+    auto readMask = constFilteredComponentMask<true, Components...>();
+    auto writeMask = constFilteredComponentMask<false, Components...>();
+    assert((readMask | writeMask) == componentMask<Components...>());
+    waitForSystems(readMask, writeMask);
+    auto system = new RunningSystem(readMask, writeMask);
+    auto threadFunc = systemThreadFunction<Components..., FuncArgs..., FuncType>;
+    system->thread = std::thread(threadFunc, tickFunc, this, system, funcArgs...);
+    mRunningSystems.emplace_back(system);
+}
+
+inline bool World::systemFinished(const std::unique_ptr<RunningSystem>& system) {
+    return system->finished.load();
+}
+
+inline void World::eraseFinishedSystems() {
+    mRunningSystems.erase(
+        std::remove_if(mRunningSystems.begin(), mRunningSystems.end(), World::systemFinished),
+        mRunningSystems.end());
+}
+
+inline void World::waitForSystems(ComponentMask readMask, ComponentMask writeMask) {
+    eraseFinishedSystems();
+    for (auto& system : mRunningSystems) {
+        // if a running system writes to a component we want to read from or write to, wait until it is finished
+        if ((system->writeMask & (readMask | writeMask)) > 0) {
+            system->thread.join();
+        }
+    }
+    eraseFinishedSystems();
+}
+
+inline void World::finishSystems() {
+    for (auto& system : mRunningSystems) {
+        system->thread.join();
+    }
+    mRunningSystems.clear();
 }
 
 template <typename ComponentType>
@@ -234,6 +313,8 @@ ComponentPool<ComponentType>& World::getPool() {
     const auto compId = static_cast<unsigned int>(componentId::get<ComponentType>());
     if (mPools.size() < compId + 1) {
         mPools.resize(compId + 1);
+    }
+    if(!mPools[compId]) {
         mPools[compId].reset(static_cast<ComponentPoolBase*>(new ComponentPool<ComponentType>()));
     }
     assert(mPools[compId]);
