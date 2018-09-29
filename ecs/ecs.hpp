@@ -33,7 +33,7 @@ namespace componentId {
 
 template <typename... Args>
 ComponentMask componentMask() {
-    return (... | (1ull << componentId::get<Args>()));
+    return (... | (1ull << componentId::get<typename std::remove_const<Args>::type>()));
 }
 
 struct ComponentPoolBase {
@@ -47,6 +47,10 @@ public:
     ~ComponentPool() = default;
     ComponentPool(const ComponentPool& other) = delete;
     ComponentPool& operator=(const ComponentPool& other) = delete;
+
+    bool has(EntityId entityId) {
+        return mIndexMap.size() > entityId && mIndexMap[entityId] != INVALID_INDEX && mIndexMap[entityId] < mComponents.size();
+    }
 
     template<typename... Args>
     ComponentType& add(EntityId entityId, Args... args) {
@@ -62,8 +66,13 @@ public:
     }
 
     ComponentType& get(EntityId entityId) {
-        assert(mIndexMap.size() > entityId && mIndexMap[entityId] != INVALID_INDEX && mComponents.size() > mIndexMap[entityId]);
+        assert(has(entityId));
         return mComponents[mIndexMap[entityId]];
+    }
+
+    void remove(EntityId entityId) {
+        assert(has(entityId));
+        mIndexMap[entityId] = INVALID_INDEX;
     }
 
 private:
@@ -210,7 +219,8 @@ private:
 
 // World implementation
 inline World::EntityIterator& World::EntityIterator::operator++() {
-    while (!mList->world.hasComponents(mEntityIndex, mList->mask) && mEntityIndex < mList->world.getEntityCount()) mEntityIndex++;
+    mEntityIndex++;
+    while (mEntityIndex < mList->world.getEntityCount() && !mList->world.hasComponents(mEntityIndex, mList->mask)) mEntityIndex++;
     if(mEntityIndex >= mList->world.getEntityCount()) {
         mEntityIndex = MAX_INDEX;
     }
