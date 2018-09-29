@@ -7,6 +7,7 @@
 #include <thread>
 #include <atomic>
 #include <algorithm>
+#include <execution>
 
 namespace ecs {
 
@@ -127,7 +128,7 @@ public:
     ComponentType& getComponent(EntityId entityId);
 
     template <typename... Components, typename... FuncArgs, typename FuncType>
-    void tickSystem(FuncType tickFunc, FuncArgs... funcArgs);
+    void tickSystem(bool async, bool parallelFor, FuncType tickFunc, FuncArgs... funcArgs);
 
     void finishSystems();
 
@@ -159,9 +160,6 @@ private:
     static bool systemFinished(const std::unique_ptr<RunningSystem>& system);
     void eraseFinishedSystems();
     void waitForSystems(ComponentMask readMask, ComponentMask writeMask);
-
-    template <typename... Components, typename... FuncArgs, typename FuncType>
-    static void systemThreadFunction(FuncType tickFunc, World* world, RunningSystem* system, FuncArgs... funcArgs);
 };
 
 class Entity {
@@ -241,7 +239,7 @@ bool World::hasComponents(EntityId entityId) const {
 template <typename ComponentType>
 ComponentType& World::getComponent(EntityId entityId) {
     assert(hasComponents<ComponentType>(entityId));
-    return getPool<std::remove_const<ComponentType>::type>().get(entityId);
+    return getPool<typename std::remove_const<ComponentType>::type>().get(entityId);
 }
 
 template <bool isConst, typename ComponentType>
@@ -259,25 +257,35 @@ ComponentMask constFilteredComponentMask() {
 }
 
 template <typename... Components, typename... FuncArgs, typename FuncType>
-void World::systemThreadFunction(FuncType tickFunc, World* world, RunningSystem* system, FuncArgs... funcArgs) {
-    for (auto e : world->entitiesWith<Components...>()) {
-        tickFunc(funcArgs..., e.get<Components>()...);
-    }
-    system->finished = true;
-}
-
-template <typename... Components, typename... FuncArgs, typename FuncType>
-void World::tickSystem(FuncType tickFunc, FuncArgs... funcArgs) {
+void World::tickSystem(bool async, bool parallelFor, FuncType tickFunc, FuncArgs... funcArgs) {
     static_assert(!(... || std::is_reference<Components>::value), "Component types must not be references");
     static_assert(std::is_same<FuncType, void(*)(FuncArgs..., Components&...)>::value, "Tick function has invalid signature");
+
     auto readMask = constFilteredComponentMask<true, Components...>();
     auto writeMask = constFilteredComponentMask<false, Components...>();
     assert((readMask | writeMask) == componentMask<Components...>());
     waitForSystems(readMask, writeMask);
-    auto system = new RunningSystem(readMask, writeMask);
-    auto threadFunc = systemThreadFunction<Components..., FuncArgs..., FuncType>;
-    system->thread = std::thread(threadFunc, tickFunc, this, system, funcArgs...);
-    mRunningSystems.emplace_back(system);
+
+    if (async) {
+        auto system = new RunningSystem(readMask, writeMask);
+        system->thread = std::thread([this, system, tickFunc, funcArgs...]() {
+            for (auto e : entitiesWith<Components...>()) {
+                tickFunc(funcArgs..., e.template get<Components>()...);
+            }
+            system->finished = true;
+        });
+
+        // I could make the lambda above a member function of World and do something like the following,
+        // but that would only compile in gcc and not msvc, so I use the lambda instead
+        //void (World::*threadFunc)(RunningSystem*, FuncType, FuncArgs...) = &systemThreadFunction<Components..., FuncArgs..., FuncType>;
+        //system->thread = std::thread(threadFunc, this, system, tickFunc, funcArgs...);
+
+        mRunningSystems.emplace_back(system);
+    } else {
+        for (auto e : entitiesWith<Components...>()) {
+            tickFunc(funcArgs..., e.template get<Components>()...);
+        }
+    }
 }
 
 inline bool World::systemFinished(const std::unique_ptr<RunningSystem>& system) {
