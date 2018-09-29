@@ -80,14 +80,30 @@ private:
     struct EntityList;
 
     class EntityIterator {
+    // To be used with std::for_each, this has to be a ForwardIterator: https://en.cppreference.com/w/cpp/named_req/ForwardIterator
+    //http://anderberg.me/2016/07/04/c-custom-iterators/
     public:
-        EntityIterator(EntityList& list, IndexType index) : mList(list), mEntityIndex(index) {}
+        // https://en.cppreference.com/w/cpp/iterator/iterator_traits
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = Entity;
+        using pointer = Entity*;
+        using reference = Entity&;
+        using difference_type = std::ptrdiff_t;
+
+        EntityIterator() : mList(nullptr), mEntityIndex(0) {}
+        EntityIterator(const EntityIterator& other) = default;
+        EntityIterator& operator=(const EntityIterator& other) = default;
+
+        EntityIterator(EntityList* list, IndexType index) : mList(list), mEntityIndex(index) {}
 
         EntityIterator& operator++();
-        bool operator!=(const EntityIterator & other) const;
+        EntityIterator operator++(int);
+        bool operator==(const EntityIterator& other) const;
+        bool operator!=(const EntityIterator& other) const;
         Entity operator*() const;
+
     private:
-        EntityList& mList;
+        EntityList* mList;
         IndexType mEntityIndex;
     };
 
@@ -99,11 +115,11 @@ private:
         ~EntityList() = default;
 
         EntityIterator begin() {
-            return EntityIterator(*this, 0);
+            return EntityIterator(this, 0);
         }
 
         EntityIterator end() {
-            return EntityIterator(*this, MAX_INDEX);
+            return EntityIterator(this, MAX_INDEX);
         }
     };
 
@@ -134,9 +150,13 @@ public:
 
     auto getEntityCount() const { return mComponentMasks.size(); }
 
-    template<typename... Args>
+    // https://stackoverflow.com/questions/41331215/what-are-the-constraints-on-the-user-using-stls-parallel-algorithms
+    template <typename... Components, typename FuncType, typename ExPo>
+    void forEachEntity(FuncType func, ExPo executionPolicy = std::execution::seq);
+
+    template <typename... Components>
     EntityList entitiesWith() {
-        return EntityList(*this, componentMask<Args...>());
+        return EntityList(*this, componentMask<Components...>());
     }
 
 private:
@@ -144,10 +164,10 @@ private:
         ComponentMask readMask;
         ComponentMask writeMask;
         std::thread thread;
-        std::atomic<bool> finished;
+        bool threadJoined;
 
         RunningSystem(ComponentMask readMask, ComponentMask writeMask) :
-            readMask(readMask), writeMask(writeMask), finished(false) {}
+            readMask(readMask), writeMask(writeMask), threadJoined(false) {}
     };
 
     std::vector<std::unique_ptr<ComponentPoolBase>> mPools;
@@ -157,15 +177,13 @@ private:
     template <typename ComponentType>
     ComponentPool<ComponentType>& getPool();
 
-    static bool systemFinished(const std::unique_ptr<RunningSystem>& system);
-    void eraseFinishedSystems();
     void waitForSystems(ComponentMask readMask, ComponentMask writeMask);
 };
 
 class Entity {
 public:
     ~Entity() = default;
-    Entity(const Entity& other) = delete;
+    Entity(const Entity& other) = default;
     Entity& operator=(const Entity& other) = delete;
 
     template <typename ComponentType, typename... Args>
@@ -192,19 +210,29 @@ private:
 
 // World implementation
 inline World::EntityIterator& World::EntityIterator::operator++() {
-    while (!mList.world.hasComponents(mEntityIndex, mList.mask) && mEntityIndex < mList.world.getEntityCount()) mEntityIndex++;
-    if(mEntityIndex >= mList.world.getEntityCount()) {
+    while (!mList->world.hasComponents(mEntityIndex, mList->mask) && mEntityIndex < mList->world.getEntityCount()) mEntityIndex++;
+    if(mEntityIndex >= mList->world.getEntityCount()) {
         mEntityIndex = MAX_INDEX;
     }
     return *this;
 }
 
+inline World::EntityIterator World::EntityIterator::operator++(int) {
+    EntityIterator ret(*this);
+    operator++();
+    return ret;
+}
+
+inline bool World::EntityIterator::operator==(const EntityIterator& other) const {
+    return mList == other.mList && mEntityIndex == other.mEntityIndex;
+}
+
 inline bool World::EntityIterator::operator!=(const EntityIterator& other) const {
-    return mEntityIndex != other.mEntityIndex;
+    return !operator==(other);
 }
 
 inline Entity World::EntityIterator::operator*() const {
-    return mList.world.entity(mEntityIndex);
+    return mList->world.entity(mEntityIndex);
 }
 
 inline Entity World::entity() {
@@ -256,6 +284,15 @@ ComponentMask constFilteredComponentMask() {
     return (... | _constFilteredComponentMask<isConst, Args>());
 }
 
+template <typename... Components, typename FuncType, typename ExPo>
+void World::forEachEntity(FuncType func, ExPo executionPolicy) {
+    // Entity has to be passed by value to the invokable, because the Entity returned from the EntityIterator
+    // is a temporary, since they are not stored somewhere, but merely handles.
+    static_assert(std::is_invocable_r<void, FuncType, Entity>::value);
+    auto entityList = entitiesWith<Components...>();
+    std::for_each(executionPolicy, entityList.begin(), entityList.end(), func);
+}
+
 template <typename... Components, typename... FuncArgs, typename FuncType>
 void World::tickSystem(bool async, bool parallelFor, FuncType tickFunc, FuncArgs... funcArgs) {
     static_assert(!(... || std::is_reference<Components>::value), "Component types must not be references");
@@ -266,14 +303,21 @@ void World::tickSystem(bool async, bool parallelFor, FuncType tickFunc, FuncArgs
     assert((readMask | writeMask) == componentMask<Components...>());
     waitForSystems(readMask, writeMask);
 
+    auto tickEntity = [tickFunc, funcArgs...](Entity e) {
+        tickFunc(funcArgs..., e.get<Components>()...);
+    };
+
+    auto tickAll = [this, parallelFor, tickEntity]() {
+        if(parallelFor) {
+            forEachEntity<Components...>(tickEntity, std::execution::par);
+        } else {
+            forEachEntity<Components...>(tickEntity, std::execution::seq);
+        }
+    };
+
     if (async) {
         auto system = new RunningSystem(readMask, writeMask);
-        system->thread = std::thread([this, system, tickFunc, funcArgs...]() {
-            for (auto e : entitiesWith<Components...>()) {
-                tickFunc(funcArgs..., e.template get<Components>()...);
-            }
-            system->finished = true;
-        });
+        system->thread = std::thread(tickAll);
 
         // I could make the lambda above a member function of World and do something like the following,
         // but that would only compile in gcc and not msvc, so I use the lambda instead
@@ -282,37 +326,26 @@ void World::tickSystem(bool async, bool parallelFor, FuncType tickFunc, FuncArgs
 
         mRunningSystems.emplace_back(system);
     } else {
-        for (auto e : entitiesWith<Components...>()) {
-            tickFunc(funcArgs..., e.template get<Components>()...);
-        }
+        tickAll();
     }
 }
 
-inline bool World::systemFinished(const std::unique_ptr<RunningSystem>& system) {
-    return system->finished.load();
-}
-
-inline void World::eraseFinishedSystems() {
-    mRunningSystems.erase(
-        std::remove_if(mRunningSystems.begin(), mRunningSystems.end(), World::systemFinished),
-        mRunningSystems.end());
-}
-
 inline void World::waitForSystems(ComponentMask readMask, ComponentMask writeMask) {
-    eraseFinishedSystems();
     for (auto& system : mRunningSystems) {
         // if a running system writes to a component we want to read from or write to, wait until it is finished
         if ((system->writeMask & (readMask | writeMask)) > 0) {
             system->thread.join();
+            system->threadJoined = true;
         }
     }
-    eraseFinishedSystems();
+    mRunningSystems.erase(
+        std::remove_if(mRunningSystems.begin(), mRunningSystems.end(), 
+            [](const std::unique_ptr<RunningSystem>& system) {return system->threadJoined; }),
+        mRunningSystems.end());
 }
 
 inline void World::finishSystems() {
-    for (auto& system : mRunningSystems) {
-        system->thread.join();
-    }
+    for (auto& system : mRunningSystems) system->thread.join();
     mRunningSystems.clear();
 }
 
