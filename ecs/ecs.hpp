@@ -17,6 +17,7 @@ static_assert(std::is_unsigned<ComponentMask>::value, "ComponentMask type must b
 static const ComponentMask ALL_COMPONENTS = std::numeric_limits<ComponentMask>::max();
 
 using EntityId = uint32_t;
+static const EntityId INVALID_ENTITY = std::numeric_limits<EntityId>::max();
 
 using IndexType = size_t;
 static const IndexType MAX_INDEX = std::numeric_limits<IndexType>::max();
@@ -226,6 +227,9 @@ public:
     template <typename ComponentType>
     ComponentType& getComponent(EntityId entityId);
 
+    template <typename ComponentType>
+    void removeComponent(EntityId entityId);
+
     template <typename... Components, typename... FuncArgs, typename FuncType>
     void tickSystem(bool async, bool parallelFor, FuncType tickFunc, FuncArgs... funcArgs);
 
@@ -270,6 +274,8 @@ public:
     EntityHandle(const EntityHandle& other) = default;
     EntityHandle& operator=(const EntityHandle& other) = delete;
 
+    void destroy();
+
     template <typename ComponentType, typename... Args>
     ComponentType& add(Args&&... args);
 
@@ -278,6 +284,9 @@ public:
 
     template <typename ComponentType>
     ComponentType& get();
+
+    template <typename ComponentType>
+    void remove();
 
     EntityId getId() const { return mId; }
     World& getWorld() const { return mWorld; }
@@ -334,6 +343,23 @@ inline EntityHandle World::getEntityHandle(EntityId entityId) {
 inline void World::destroyEntity(EntityId entityId) {
     assert(mComponentMasks.size() >= entityId); // entity exists
     mComponentMasks[entityId] = 0;
+    for(size_t compId = 0; compId < mPools.size(); ++compId) {
+        auto hasComponent = (mComponentMasks[entityId] & (1ull << compId)) > 0;
+        if(mPools[compId] && hasComponent) mPools[compId]->remove(entityId);
+    }
+}
+
+template <typename ComponentType>
+ComponentPool<ComponentType>& World::getPool() {
+    const auto compId = static_cast<unsigned int>(componentId::get<ComponentType>());
+    if(mPools.size() < compId + 1) {
+        mPools.resize(compId + 1);
+    }
+    if(!mPools[compId]) {
+        mPools[compId].reset(static_cast<ComponentPoolBase*>(new ComponentPool<ComponentType>()));
+    }
+    assert(mPools[compId]);
+    return *static_cast<ComponentPool<ComponentType>*>(mPools[compId].get());
 }
 
 template <typename ComponentType, typename... Args>
@@ -359,6 +385,11 @@ template <typename ComponentType>
 ComponentType& World::getComponent(EntityId entityId) {
     assert(hasComponents<ComponentType>(entityId));
     return getPool<typename std::remove_const<ComponentType>::type>().get(entityId);
+}
+
+template <typename ComponentType>
+void World::removeComponent(EntityId entityId) {
+    getPool<ComponentType>().remove(entityId);
 }
 
 template <bool isConst, typename ComponentType>
@@ -440,21 +471,13 @@ inline void World::finishSystems() {
     mRunningSystems.clear();
 }
 
-template <typename ComponentType>
-ComponentPool<ComponentType>& World::getPool() {
-    const auto compId = static_cast<unsigned int>(componentId::get<ComponentType>());
-    if (mPools.size() < compId + 1) {
-        mPools.resize(compId + 1);
-    }
-    if(!mPools[compId]) {
-        mPools[compId].reset(static_cast<ComponentPoolBase*>(new ComponentPool<ComponentType>()));
-    }
-    assert(mPools[compId]);
-    return *static_cast<ComponentPool<ComponentType>*>(mPools[compId].get());
-}
-
 
 // EntityHandle implementation
+inline void EntityHandle::destroy() {
+    mWorld.destroyEntity(mId);
+    mId = INVALID_ENTITY;
+}
+
 template <typename ComponentType, typename... Args>
 ComponentType& EntityHandle::add(Args&&... args) {
     return mWorld.addComponent<ComponentType>(mId, std::forward<Args>(args)...);
@@ -468,6 +491,11 @@ bool EntityHandle::has() const {
 template <typename ComponentType>
 ComponentType& EntityHandle::get() {
     return mWorld.getComponent<ComponentType>(mId);
+}
+
+template <typename ComponentType>
+void EntityHandle::remove() {
+    mWorld.removeComponent<ComponentType>(mId);
 }
 
 } // namespace ecs
