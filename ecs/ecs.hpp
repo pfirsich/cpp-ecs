@@ -16,6 +16,7 @@ namespace ecs {
 using ComponentMask = uint64_t;
 static_assert(std::is_unsigned<ComponentMask>::value, "ComponentMask type must be unsigned");
 static const ComponentMask ALL_COMPONENTS = std::numeric_limits<ComponentMask>::max();
+static const size_t MAX_COMPONENTS = std::numeric_limits<ComponentMask>::digits;
 
 using EntityId = uint32_t;
 static const EntityId INVALID_ENTITY = std::numeric_limits<EntityId>::max();
@@ -25,12 +26,12 @@ static const IndexType MAX_INDEX = std::numeric_limits<IndexType>::max();
 
 
 namespace componentId {
-    static ComponentMask idCounter = 0;
+    static size_t idCounter = 0;
 
     template <typename ComponentType>
-    ComponentMask get() {
+    size_t get() {
         static auto id = idCounter++;
-        assert(id <= std::numeric_limits<ComponentMask>::digits);
+        assert(id < MAX_COMPONENTS);
         return id;
     }
 }
@@ -355,7 +356,7 @@ inline void World::destroyEntity(EntityId entityId) {
 
 template <typename ComponentType>
 ComponentPool<ComponentType>& World::getPool() {
-    const auto compId = static_cast<unsigned int>(componentId::get<ComponentType>());
+    const auto compId = componentId::get<ComponentType>();
     if(mPools.size() < compId + 1) {
         mPools.resize(compId + 1);
     }
