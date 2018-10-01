@@ -32,7 +32,7 @@ void tickPhysicsSystem(ecs::World& world, float dt) {
 
 int main(int argc, char** argv) {
     ecs::World world;
-    auto e = world.entity();
+    auto e = world.createEntity();
     e.add<Position>(0.0f, 0.0f);
     e.add<Velocity>(0.0f, 0.0f);
     //tickPhysicsSystem(world, 1.0f);

@@ -38,6 +38,7 @@ ComponentMask componentMask() {
 
 struct ComponentPoolBase {
     virtual ~ComponentPoolBase() = default;
+    virtual void remove(EntityId entityId) = 0;
 };
 
 template<typename ComponentType>
@@ -70,7 +71,7 @@ public:
         return mComponents[mIndexMap[entityId]];
     }
 
-    void remove(EntityId entityId) {
+    void remove(EntityId entityId) override {
         assert(has(entityId));
         mIndexMap[entityId] = INVALID_INDEX;
     }
@@ -82,7 +83,7 @@ private:
     static const IndexType INVALID_INDEX = MAX_INDEX;
 };
 
-class Entity;
+class EntityHandle;
 
 class World {
 private:
@@ -94,9 +95,9 @@ private:
     public:
         // https://en.cppreference.com/w/cpp/iterator/iterator_traits
         using iterator_category = std::forward_iterator_tag;
-        using value_type = Entity;
-        using pointer = Entity*;
-        using reference = Entity&;
+        using value_type = EntityHandle;
+        using pointer = EntityHandle*;
+        using reference = EntityHandle&;
         using difference_type = std::ptrdiff_t;
 
         EntityIterator() : mList(nullptr), mEntityIndex(0) {}
@@ -109,7 +110,7 @@ private:
         EntityIterator operator++(int);
         bool operator==(const EntityIterator& other) const;
         bool operator!=(const EntityIterator& other) const;
-        Entity operator*() const;
+        EntityHandle operator*() const;
 
     private:
         EntityList* mList;
@@ -138,8 +139,10 @@ public:
     World(const World& other) = default;
     World& operator=(const World& other) = default;
 
-    Entity entity();
-    Entity entity(EntityId entityId);
+    EntityHandle createEntity();
+    EntityHandle getEntityHandle(EntityId entityId);
+
+    void destroyEntity(EntityId entityId);
 
     template <typename ComponentType, typename... Args>
     ComponentType& addComponent(EntityId entityId, Args&&... args);
@@ -189,11 +192,11 @@ private:
     void waitForSystems(ComponentMask readMask, ComponentMask writeMask);
 };
 
-class Entity {
+class EntityHandle {
 public:
-    ~Entity() = default;
-    Entity(const Entity& other) = default;
-    Entity& operator=(const Entity& other) = delete;
+    ~EntityHandle() = default;
+    EntityHandle(const EntityHandle& other) = default;
+    EntityHandle& operator=(const EntityHandle& other) = delete;
 
     template <typename ComponentType, typename... Args>
     ComponentType& add(Args&&... args);
@@ -211,10 +214,10 @@ private:
     World& mWorld;
     EntityId mId;
 
-    Entity(World& world, EntityId id) : mWorld(world), mId(id) {}
+    EntityHandle(World& world, EntityId id) : mWorld(world), mId(id) {}
 
-    friend Entity World::entity();
-    friend Entity World::entity(EntityId);
+    friend EntityHandle World::createEntity();
+    friend EntityHandle World::getEntityHandle(EntityId);
 };
 
 // World implementation
@@ -241,18 +244,23 @@ inline bool World::EntityIterator::operator!=(const EntityIterator& other) const
     return !operator==(other);
 }
 
-inline Entity World::EntityIterator::operator*() const {
-    return mList->world.entity(mEntityIndex);
+inline EntityHandle World::EntityIterator::operator*() const {
+    return mList->world.getEntityHandle(mEntityIndex);
 }
 
-inline Entity World::entity() {
+inline EntityHandle World::createEntity() {
     mComponentMasks.push_back(0);
-    return Entity(*this, mComponentMasks.size() - 1);
+    return EntityHandle(*this, mComponentMasks.size() - 1);
 }
 
-inline Entity World::entity(EntityId entityId) {
+inline EntityHandle World::getEntityHandle(EntityId entityId) {
     assert(mComponentMasks.size() >= entityId); // entity exists
-    return Entity(*this, entityId);
+    return EntityHandle(*this, entityId);
+}
+
+inline void World::destroyEntity(EntityId entityId) {
+    assert(mComponentMasks.size() >= entityId); // entity exists
+    mComponentMasks[entityId] = 0;
 }
 
 template <typename ComponentType, typename... Args>
@@ -296,9 +304,9 @@ ComponentMask constFilteredComponentMask() {
 
 template <typename... Components, typename FuncType, typename ExPo>
 void World::forEachEntity(FuncType func, ExPo executionPolicy) {
-    // Entity has to be passed by value to the invokable, because the Entity returned from the EntityIterator
+    // EntityHandle has to be passed by value to the invokable, because the EntityHandle returned from the EntityIterator
     // is a temporary, since they are not stored somewhere, but merely handles.
-    static_assert(std::is_invocable_r<void, FuncType, Entity>::value);
+    static_assert(std::is_invocable_r<void, FuncType, EntityHandle>::value);
     auto entityList = entitiesWith<Components...>();
     std::for_each(executionPolicy, entityList.begin(), entityList.end(), func);
 }
@@ -313,7 +321,7 @@ void World::tickSystem(bool async, bool parallelFor, FuncType tickFunc, FuncArgs
     assert((readMask | writeMask) == componentMask<Components...>());
     waitForSystems(readMask, writeMask);
 
-    auto tickEntity = [tickFunc, funcArgs...](Entity e) {
+    auto tickEntity = [tickFunc, funcArgs...](EntityHandle e) {
         tickFunc(funcArgs..., e.get<Components>()...);
     };
 
@@ -372,19 +380,19 @@ ComponentPool<ComponentType>& World::getPool() {
     return *static_cast<ComponentPool<ComponentType>*>(mPools[compId].get());
 }
 
-// Entity implementation
+// EntityHandle implementation
 template <typename ComponentType, typename... Args>
-ComponentType& Entity::add(Args&&... args) {
+ComponentType& EntityHandle::add(Args&&... args) {
     return mWorld.addComponent<ComponentType>(mId, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-bool Entity::has() const {
+bool EntityHandle::has() const {
     return mWorld.hasComponents<Args...>(mId);
 }
 
 template <typename ComponentType>
-ComponentType& Entity::get() {
+ComponentType& EntityHandle::get() {
     return mWorld.getComponent<ComponentType>(mId);
 }
 
