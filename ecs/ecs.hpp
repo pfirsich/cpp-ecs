@@ -10,6 +10,7 @@
 #include <execution>
 #include <tuple>
 #include <bitset>
+#include <array>
 
 namespace ecs {
 
@@ -262,7 +263,7 @@ private:
             readMask(readMask), writeMask(writeMask), threadJoined(false) {}
     };
 
-    std::vector<std::unique_ptr<ComponentPoolBase>> mPools;
+    std::array<std::unique_ptr<ComponentPoolBase>, MAX_COMPONENTS> mPools;
     std::vector<ComponentMask> mComponentMasks;
     std::vector<std::unique_ptr<RunningSystem>> mRunningSystems;
 
@@ -357,9 +358,7 @@ inline void World::destroyEntity(EntityId entityId) {
 template <typename ComponentType>
 ComponentPool<ComponentType>& World::getPool() {
     const auto compId = componentId::get<ComponentType>();
-    if(mPools.size() < compId + 1) {
-        mPools.resize(compId + 1);
-    }
+    assert(compId < mPools.size());
     if(!mPools[compId]) {
         mPools[compId].reset(static_cast<ComponentPoolBase*>(new ComponentPool<ComponentType>()));
     }
