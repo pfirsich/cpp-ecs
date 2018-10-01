@@ -8,6 +8,7 @@
 #include <atomic>
 #include <algorithm>
 #include <execution>
+#include <tuple>
 
 namespace ecs {
 
@@ -19,6 +20,7 @@ using EntityId = uint32_t;
 
 using IndexType = size_t;
 static const IndexType MAX_INDEX = std::numeric_limits<IndexType>::max();
+
 
 namespace componentId {
     static ComponentMask idCounter = 0;
@@ -36,52 +38,121 @@ ComponentMask componentMask() {
     return (... | (1ull << componentId::get<typename std::remove_const<Args>::type>()));
 }
 
+
 struct ComponentPoolBase {
     virtual ~ComponentPoolBase() = default;
     virtual void remove(EntityId entityId) = 0;
 };
 
-template<typename ComponentType>
+template <typename ComponentType>
 class ComponentPool : public ComponentPoolBase {
 public:
-    ComponentPool() : mComponentId(componentId::get<ComponentType>()) {}
-    ~ComponentPool() = default;
+    ComponentPool() = default;
+    ~ComponentPool();
     ComponentPool(const ComponentPool& other) = delete;
     ComponentPool& operator=(const ComponentPool& other) = delete;
 
-    bool has(EntityId entityId) {
-        return mIndexMap.size() > entityId && mIndexMap[entityId] != INVALID_INDEX && mIndexMap[entityId] < mComponents.size();
-    }
-
     template<typename... Args>
-    ComponentType& add(EntityId entityId, Args... args) {
-        if(mIndexMap.size() < entityId + 1) {
-            mIndexMap.resize(entityId + 1, INVALID_INDEX);
-        }
-        if(mIndexMap[entityId] == INVALID_INDEX) {
-            mIndexMap[entityId] = mComponents.size();
-            return mComponents.emplace_back(std::forward<Args>(args)...);
-        } else {
-            return mComponents[mIndexMap[entityId]];
-        }
-    }
+    ComponentType& add(EntityId entityId, Args... args);
 
-    ComponentType& get(EntityId entityId) {
-        assert(has(entityId));
-        return mComponents[mIndexMap[entityId]];
-    }
+    bool has(EntityId entityId) const;
+    
+    ComponentType& get(EntityId entityId);
 
-    void remove(EntityId entityId) override {
-        assert(has(entityId));
-        mIndexMap[entityId] = INVALID_INDEX;
-    }
+    void remove(EntityId entityId) override;
+
+    static const size_t DEFAULT_BLOCK_SIZE = 64;
 
 private:
-    ComponentMask mComponentId;
-    std::vector<ComponentType> mComponents;
-    std::vector<IndexType> mIndexMap;
-    static const IndexType INVALID_INDEX = MAX_INDEX;
+    // https://gist.github.com/pfirsich/72ec22c4407013eccfab3a78f2ac7a23
+    template <class T>
+    static constexpr size_t getBlockSizeImpl(const T* t, ...) {
+        return DEFAULT_BLOCK_SIZE;
+    }
+
+    template <class T>
+    static constexpr typename std::enable_if<!std::is_void<decltype(T::var)>::value, size_t>::type
+        getBlockSizeImpl(const T* t, int) {
+        return T::var;
+    }
+
+    static constexpr auto getIndices(EntityId entityId) {
+        return std::make_pair<size_t, size_t>(entityId / BLOCK_SIZE, entityId % BLOCK_SIZE);
+    }
+
+    ComponentType* getPointer(size_t blockIndex, size_t componentIndex) {
+        assert(mBlocks[blockIndex]);
+        return reinterpret_cast<ComponentType*>(mBlocks[blockIndex]) + componentIndex;
+    }
+
+    void checkBlockUsage(size_t blockIndex);
+
+    static const size_t BLOCK_SIZE = getBlockSizeImpl(static_cast<ComponentType*>(nullptr), 0);
+    static const size_t COMPONENT_SIZE = sizeof(ComponentType);
+
+    std::vector<bool> mOccupancyMap;
+    std::vector<void*> mBlocks;
 };
+
+template <typename ComponentType>
+ComponentPool<ComponentType>::~ComponentPool() {
+    for(auto& p : mBlocks) {
+        operator delete(p);
+        p = nullptr;
+    }
+}
+
+template <typename ComponentType>
+template <typename... Args>
+ComponentType& ComponentPool<ComponentType>::add(EntityId entityId, Args... args) {
+    assert(!has(entityId));
+    size_t blockIndex, componentIndex;
+    std::tie(blockIndex, componentIndex) = getIndices(entityId);
+
+    if(mBlocks.size() < blockIndex + 1) mBlocks.resize(blockIndex + 1, nullptr);
+    if(!mBlocks[blockIndex]) mBlocks[blockIndex] = operator new(BLOCK_SIZE * COMPONENT_SIZE);
+    auto component = new(getPointer(blockIndex, componentIndex)) ComponentType(std::forward<Args>(args)...);
+
+    if(mOccupancyMap.size() < entityId + 1) mOccupancyMap.resize(entityId + 1, false);
+    mOccupancyMap[entityId] = true;
+
+    return *component;
+}
+
+template <typename ComponentType>
+bool ComponentPool<ComponentType>::has(EntityId entityId) const {
+    return mOccupancyMap.size() > entityId && mOccupancyMap[entityId];
+}
+
+template <typename ComponentType>
+ComponentType& ComponentPool<ComponentType>::get(EntityId entityId) {
+    assert(has(entityId));
+    auto index = getIndices(entityId);
+    return *getPointer(index.first, index.second);
+}
+
+template <typename ComponentType>
+void ComponentPool<ComponentType>::remove(EntityId entityId) {
+    assert(has(entityId));
+    size_t blockIndex, componentIndex;
+    std::tie(blockIndex, componentIndex) = getIndices(entityId);
+
+    auto component = getPointer(blockIndex, componentIndex);
+    component->~ComponentType();
+    mOccupancyMap[entityId] = false;
+    checkBlockUsage(blockIndex);
+}
+
+template <typename ComponentType>
+void ComponentPool<ComponentType>::checkBlockUsage(size_t blockIndex) {
+    const auto blockStart = mOccupancyMap.begin() + blockIndex * BLOCK_SIZE;
+    // msvc, clang and gcc all don't seem to have optimized implementations of std::count for vector<bool>
+    if(std::count(blockStart, blockStart + BLOCK_SIZE, true) == 0) { // block is unused
+        operator delete(mBlocks[blockIndex]);
+        mBlocks[blockIndex] = nullptr;
+    }
+}
+
 
 class EntityHandle;
 
@@ -192,6 +263,7 @@ private:
     void waitForSystems(ComponentMask readMask, ComponentMask writeMask);
 };
 
+
 class EntityHandle {
 public:
     ~EntityHandle() = default;
@@ -219,6 +291,7 @@ private:
     friend EntityHandle World::createEntity();
     friend EntityHandle World::getEntityHandle(EntityId);
 };
+
 
 // World implementation
 inline World::EntityIterator& World::EntityIterator::operator++() {
@@ -379,6 +452,7 @@ ComponentPool<ComponentType>& World::getPool() {
     assert(mPools[compId]);
     return *static_cast<ComponentPool<ComponentType>*>(mPools[compId].get());
 }
+
 
 // EntityHandle implementation
 template <typename ComponentType, typename... Args>
