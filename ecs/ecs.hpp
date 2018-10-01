@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <execution>
 #include <tuple>
+#include <bitset>
 
 namespace ecs {
 
@@ -77,29 +78,33 @@ private:
         return T::var;
     }
 
+    static const size_t BLOCK_SIZE = getBlockSizeImpl(static_cast<ComponentType*>(nullptr), 0);
+    static const size_t COMPONENT_SIZE = sizeof(ComponentType);
+
     static constexpr auto getIndices(EntityId entityId) {
         return std::make_pair<size_t, size_t>(entityId / BLOCK_SIZE, entityId % BLOCK_SIZE);
     }
 
     ComponentType* getPointer(size_t blockIndex, size_t componentIndex) {
-        assert(mBlocks[blockIndex]);
-        return reinterpret_cast<ComponentType*>(mBlocks[blockIndex]) + componentIndex;
+        assert(mBlocks[blockIndex].data);
+        return reinterpret_cast<ComponentType*>(mBlocks[blockIndex].data) + componentIndex;
     }
 
     void checkBlockUsage(size_t blockIndex);
 
-    static const size_t BLOCK_SIZE = getBlockSizeImpl(static_cast<ComponentType*>(nullptr), 0);
-    static const size_t COMPONENT_SIZE = sizeof(ComponentType);
-
-    std::vector<bool> mOccupancyMap;
-    std::vector<void*> mBlocks;
+    struct Block {
+        void* data;
+        std::bitset<BLOCK_SIZE> occupied;
+        Block() : data(nullptr), occupied() {}
+    };
+    std::vector<Block> mBlocks;
 };
 
 template <typename ComponentType>
 ComponentPool<ComponentType>::~ComponentPool() {
-    for(auto& p : mBlocks) {
-        operator delete(p);
-        p = nullptr;
+    for(auto& block : mBlocks) {
+        operator delete(block.data);
+        block.data = nullptr;
     }
 }
 
@@ -110,19 +115,19 @@ ComponentType& ComponentPool<ComponentType>::add(EntityId entityId, Args... args
     size_t blockIndex, componentIndex;
     std::tie(blockIndex, componentIndex) = getIndices(entityId);
 
-    if(mBlocks.size() < blockIndex + 1) mBlocks.resize(blockIndex + 1, nullptr);
-    if(!mBlocks[blockIndex]) mBlocks[blockIndex] = operator new(BLOCK_SIZE * COMPONENT_SIZE);
+    if(mBlocks.size() < blockIndex + 1) mBlocks.resize(blockIndex + 1);
+    auto& block = mBlocks[blockIndex];
+    if(!block.data) block.data = operator new(BLOCK_SIZE * COMPONENT_SIZE);
+    block.occupied[componentIndex] = true;
     auto component = new(getPointer(blockIndex, componentIndex)) ComponentType(std::forward<Args>(args)...);
-
-    if(mOccupancyMap.size() < entityId + 1) mOccupancyMap.resize(entityId + 1, false);
-    mOccupancyMap[entityId] = true;
 
     return *component;
 }
 
 template <typename ComponentType>
 bool ComponentPool<ComponentType>::has(EntityId entityId) const {
-    return mOccupancyMap.size() > entityId && mOccupancyMap[entityId];
+    auto index = getIndices(entityId);
+    return mBlocks.size() > index.first && mBlocks[index.first].occupied[index.second];
 }
 
 template <typename ComponentType>
@@ -140,17 +145,16 @@ void ComponentPool<ComponentType>::remove(EntityId entityId) {
 
     auto component = getPointer(blockIndex, componentIndex);
     component->~ComponentType();
-    mOccupancyMap[entityId] = false;
+    mBlocks[blockIndex].occupied[componentIndex] = false;
     checkBlockUsage(blockIndex);
 }
 
 template <typename ComponentType>
 void ComponentPool<ComponentType>::checkBlockUsage(size_t blockIndex) {
-    const auto blockStart = mOccupancyMap.begin() + blockIndex * BLOCK_SIZE;
-    // msvc, clang and gcc all don't seem to have optimized implementations of std::count for vector<bool>
-    if(std::count(blockStart, blockStart + BLOCK_SIZE, true) == 0) { // block is unused
-        operator delete(mBlocks[blockIndex]);
-        mBlocks[blockIndex] = nullptr;
+    auto& block = mBlocks[blockIndex];
+    if(block.occupied.none()) { // block is unused
+        operator delete(block.data);
+        block.data = nullptr;
     }
 }
 
