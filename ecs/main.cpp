@@ -36,6 +36,9 @@ int main(int argc, char** argv) {
     e.add<Position>(0.0f, 0.0f);
     e.add<Velocity>(0.0f, 0.0f);
     //tickPhysicsSystem(world, 1.0f);
-    world.tickSystem<Position, const Velocity>(true, true, physicsSystem, 1.0f);
-    world.finishSystems();
+    world.flush();
+    while(true) {
+        world.tickSystem<Position, const Velocity>(true, true, physicsSystem, 1.0f);
+        world.finishTick();
+    }
 }

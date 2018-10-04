@@ -239,7 +239,14 @@ public:
     template <typename... Components, typename... FuncArgs, typename FuncType>
     void tickSystem(bool async, bool parallelFor, FuncType tickFunc, FuncArgs... funcArgs);
 
-    void finishSystems();
+    void joinSystemThreads();
+    void flush(EntityId entityId);
+    void flush(); // flush all
+
+    void finishTick() {
+        joinSystemThreads();
+        flush();
+    }
 
     auto getEntityCount() const { return mComponentMasks.size(); }
 
@@ -263,9 +270,12 @@ private:
             readMask(readMask), writeMask(writeMask), threadJoined(false) {}
     };
 
-    std::array<std::unique_ptr<ComponentPoolBase>, MAX_COMPONENTS> mPools;
     std::vector<ComponentMask> mComponentMasks;
+    std::vector<bool> mEntityValid;
+    // the free list is a min heap, so that we try to fill lower indices first
+    std::priority_queue<EntityId, std::vector<EntityId>, std::greater<EntityId>> mEntityIdFreeList;
     std::vector<std::unique_ptr<RunningSystem>> mRunningSystems;
+    std::array<std::unique_ptr<ComponentPoolBase>, MAX_COMPONENTS> mPools;
 
     template <typename ComponentType>
     ComponentPool<ComponentType>& getPool();
@@ -337,22 +347,43 @@ inline EntityHandle World::EntityIterator::operator*() const {
 }
 
 inline EntityHandle World::createEntity() {
-    mComponentMasks.push_back(0);
-    return EntityHandle(*this, mComponentMasks.size() - 1);
+    if(mEntityIdFreeList.empty()) {
+        mComponentMasks.push_back(0);
+        mEntityValid.push_back(false);
+        assert(mComponentMasks.size() == mEntityValid.size());
+        return EntityHandle(*this, mComponentMasks.size() - 1);
+    } else {
+        const auto entityId = mEntityIdFreeList.top();
+        mEntityIdFreeList.pop();
+        assert(entityId < mComponentMasks.size() && entityId < mEntityValid.size());
+        mComponentMasks[entityId] = 0;
+        mEntityValid[entityId] = false;
+        return EntityHandle(*this, entityId);
+    }
 }
 
 inline EntityHandle World::getEntityHandle(EntityId entityId) {
-    assert(mComponentMasks.size() >= entityId); // entity exists
+    assert(entityId < mComponentMasks.size()); // entity exists
     return EntityHandle(*this, entityId);
 }
 
 inline void World::destroyEntity(EntityId entityId) {
     assert(mComponentMasks.size() >= entityId); // entity exists
+    mEntityIdFreeList.push(entityId);
     mComponentMasks[entityId] = 0;
     for(size_t compId = 0; compId < mPools.size(); ++compId) {
-        auto hasComponent = (mComponentMasks[entityId] & (1ull << compId)) > 0;
+        const auto hasComponent = (mComponentMasks[entityId] & (1ull << compId)) > 0;
         if(mPools[compId] && hasComponent) mPools[compId]->remove(entityId);
     }
+}
+
+inline void World::flush() {
+    std::fill(mEntityValid.begin(), mEntityValid.end(), true);
+}
+
+inline void World::flush(EntityId entityId) {
+    assert(entityId < mEntityValid.size());
+    mEntityValid[entityId] = true;
 }
 
 template <typename ComponentType>
@@ -470,7 +501,7 @@ inline void World::waitForSystems(ComponentMask readMask, ComponentMask writeMas
         mRunningSystems.end());
 }
 
-inline void World::finishSystems() {
+inline void World::joinSystemThreads() {
     for (auto& system : mRunningSystems) system->thread.join();
     mRunningSystems.clear();
 }
