@@ -75,12 +75,13 @@ private:
     }
 
     template <class T>
-    static constexpr typename std::enable_if<!std::is_void<decltype(T::var)>::value, size_t>::type
+    static constexpr typename std::enable_if<!std::is_void<decltype(T::BLOCK_SIZE)>::value, size_t>::type
         getBlockSizeImpl(const T* t, int) {
-        return T::var;
+        return T::BLOCK_SIZE;
     }
 
     static const size_t BLOCK_SIZE = getBlockSizeImpl(static_cast<ComponentType*>(nullptr), 0);
+    static_assert(BLOCK_SIZE > 0);
     static const size_t COMPONENT_SIZE = sizeof(ComponentType);
 
     static constexpr auto getIndices(EntityId entityId) {
@@ -403,7 +404,6 @@ ComponentPool<ComponentType>& World::getPool() {
 
 template <typename ComponentType, typename... Args>
 ComponentType& World::addComponent(EntityId entityId, Args&&... args) {
-    static_assert(std::is_default_constructible<ComponentType>::value, "Component types must be default constructible.");
     assert(mComponentMasks.size() > entityId);
     assert(!hasComponents<ComponentType>(entityId));
     mComponentMasks[entityId] |= componentMask<ComponentType>();
