@@ -60,7 +60,7 @@ public:
     ComponentType& add(EntityId entityId, Args... args);
 
     bool has(EntityId entityId) const;
-    
+
     ComponentType& get(EntityId entityId);
 
     void remove(EntityId entityId) override;
@@ -84,7 +84,7 @@ private:
     static const size_t COMPONENT_SIZE = sizeof(ComponentType);
 
     static constexpr auto getIndices(EntityId entityId) {
-        return std::make_pair<size_t, size_t>(entityId / BLOCK_SIZE, entityId % BLOCK_SIZE);
+        return std::pair<size_t, size_t>(entityId / BLOCK_SIZE, entityId % BLOCK_SIZE);
     }
 
     ComponentType* getPointer(size_t blockIndex, size_t componentIndex) {
@@ -114,8 +114,7 @@ template <typename ComponentType>
 template <typename... Args>
 ComponentType& ComponentPool<ComponentType>::add(EntityId entityId, Args... args) {
     assert(!has(entityId));
-    size_t blockIndex, componentIndex;
-    std::tie(blockIndex, componentIndex) = getIndices(entityId);
+    auto [blockIndex, componentIndex] = getIndices(entityId);
 
     if(mBlocks.size() < blockIndex + 1) mBlocks.resize(blockIndex + 1);
     auto& block = mBlocks[blockIndex];
@@ -128,23 +127,21 @@ ComponentType& ComponentPool<ComponentType>::add(EntityId entityId, Args... args
 
 template <typename ComponentType>
 bool ComponentPool<ComponentType>::has(EntityId entityId) const {
-    auto index = getIndices(entityId);
-    return mBlocks.size() > index.first && mBlocks[index.first].occupied[index.second];
+    auto [blockIndex, componentIndex] = getIndices(entityId);
+    return mBlocks.size() > blockIndex && mBlocks[blockIndex].occupied[componentIndex];
 }
 
 template <typename ComponentType>
 ComponentType& ComponentPool<ComponentType>::get(EntityId entityId) {
     assert(has(entityId));
-    auto index = getIndices(entityId);
-    return *getPointer(index.first, index.second);
+    auto [blockIndex, componentIndex] = getIndices(entityId);
+    return *getPointer(blockIndex, componentIndex);
 }
 
 template <typename ComponentType>
 void ComponentPool<ComponentType>::remove(EntityId entityId) {
     assert(has(entityId));
-    size_t blockIndex, componentIndex;
-    std::tie(blockIndex, componentIndex) = getIndices(entityId);
-
+    auto [blockIndex, componentIndex] = getIndices(entityId);
     auto component = getPointer(blockIndex, componentIndex);
     component->~ComponentType();
     mBlocks[blockIndex].occupied[componentIndex] = false;
@@ -273,7 +270,7 @@ private:
     std::vector<ComponentMask> mComponentMasks;
     std::vector<bool> mEntityValid;
     // the free list is a min heap, so that we try to fill lower indices first
-    std::priority_queue<EntityId, std::vector<EntityId>, std::greater<EntityId>> mEntityIdFreeList;
+    std::priority_queue<EntityId, std::vector<EntityId>, std::greater<>> mEntityIdFreeList;
     std::vector<std::unique_ptr<RunningSystem>> mRunningSystems;
     std::array<std::unique_ptr<ComponentPoolBase>, MAX_COMPONENTS> mPools;
 
@@ -391,7 +388,7 @@ ComponentPool<ComponentType>& World::getPool() {
     const auto compId = componentId::get<ComponentType>();
     assert(compId < mPools.size());
     if(!mPools[compId]) {
-        mPools[compId].reset(static_cast<ComponentPoolBase*>(new ComponentPool<ComponentType>()));
+        mPools[compId] = std::make_unique<ComponentPool<ComponentType>>();
     }
     assert(mPools[compId]);
     return *static_cast<ComponentPool<ComponentType>*>(mPools[compId].get());
@@ -496,7 +493,7 @@ inline void World::waitForSystems(ComponentMask readMask, ComponentMask writeMas
         }
     }
     mRunningSystems.erase(
-        std::remove_if(mRunningSystems.begin(), mRunningSystems.end(), 
+        std::remove_if(mRunningSystems.begin(), mRunningSystems.end(),
             [](const std::unique_ptr<RunningSystem>& system) {return system->threadJoined; }),
         mRunningSystems.end());
 }
