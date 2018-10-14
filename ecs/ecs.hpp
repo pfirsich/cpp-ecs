@@ -233,6 +233,11 @@ public:
     template <typename ComponentType>
     void removeComponent(EntityId entityId);
 
+    bool isValid(EntityId entityId) const {
+        assert(entityId < mEntityValid.size());
+        return mEntityValid[entityId];
+    }
+
     template <typename... Components, typename... FuncArgs, typename FuncType>
     void tickSystem(bool async, bool parallelFor, FuncType tickFunc, FuncArgs... funcArgs);
 
@@ -318,7 +323,9 @@ private:
 // World implementation
 inline World::EntityIterator& World::EntityIterator::operator++() {
     mEntityIndex++;
-    while (mEntityIndex < mList->world.getEntityCount() && !mList->world.hasComponents(mEntityIndex, mList->mask)) mEntityIndex++;
+    while (mEntityIndex < mList->world.getEntityCount()
+           && mList->world.isValid(mEntityIndex)
+           && !mList->world.hasComponents(mEntityIndex, mList->mask)) mEntityIndex++;
     if(mEntityIndex >= mList->world.getEntityCount()) {
         mEntityIndex = MAX_INDEX;
     }
