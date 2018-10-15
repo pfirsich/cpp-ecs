@@ -386,7 +386,7 @@ inline void World::destroyEntity(EntityId entityId) {
 }
 
 inline void World::flush() {
-    std::fill(mEntityValid.begin(), mEntityValid.end(), true);
+    mEntityValid.assign(mEntityValid.size(), true);
 }
 
 inline void World::flush(EntityId entityId) {
