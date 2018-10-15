@@ -279,9 +279,10 @@ private:
     std::priority_queue<EntityId, std::vector<EntityId>, std::greater<>> mEntityIdFreeList;
     std::vector<std::unique_ptr<RunningSystem>> mRunningSystems;
     std::array<std::unique_ptr<ComponentPoolBase>, MAX_COMPONENTS> mPools;
+    mutable std::mutex mMutex;
 
     template <typename ComponentType>
-    ComponentPool<ComponentType>& getPool();
+    ComponentPool<ComponentType>& getPool(bool alloc = true);
 
     void waitForSystems(ComponentMask readMask, ComponentMask writeMask);
 };
@@ -352,6 +353,7 @@ inline EntityHandle World::EntityIterator::operator*() const {
 }
 
 inline EntityHandle World::createEntity() {
+    std::lock_guard lock(mMutex);
     if(mEntityIdFreeList.empty()) {
         mComponentMasks.push_back(0);
         mEntityValid.push_back(false);
@@ -373,6 +375,7 @@ inline EntityHandle World::getEntityHandle(EntityId entityId) {
 }
 
 inline void World::destroyEntity(EntityId entityId) {
+    std::lock_guard lock(mMutex);
     assert(mComponentMasks.size() >= entityId); // entity exists
     mEntityIdFreeList.push(entityId);
     mComponentMasks[entityId] = 0;
@@ -392,10 +395,10 @@ inline void World::flush(EntityId entityId) {
 }
 
 template <typename ComponentType>
-ComponentPool<ComponentType>& World::getPool() {
+ComponentPool<ComponentType>& World::getPool(bool alloc) {
     const auto compId = componentId::get<ComponentType>();
     assert(compId < mPools.size());
-    if(!mPools[compId]) {
+    if(alloc && !mPools[compId]) {
         mPools[compId] = std::make_unique<ComponentPool<ComponentType>>();
     }
     assert(mPools[compId]);
@@ -404,6 +407,7 @@ ComponentPool<ComponentType>& World::getPool() {
 
 template <typename ComponentType, typename... Args>
 ComponentType& World::addComponent(EntityId entityId, Args&&... args) {
+    std::lock_guard lock(mMutex);
     assert(mComponentMasks.size() > entityId);
     assert(!hasComponents<ComponentType>(entityId));
     mComponentMasks[entityId] |= componentMask<ComponentType>();
@@ -423,11 +427,15 @@ bool World::hasComponents(EntityId entityId) const {
 template <typename ComponentType>
 ComponentType& World::getComponent(EntityId entityId) {
     assert(hasComponents<ComponentType>(entityId));
-    return getPool<typename std::remove_const<ComponentType>::type>().get(entityId);
+    // make getPool not alloc, so we don't have to protect getComponent with the mutex
+    // this should never trigger an allocation anyways, since we assert hasComponent above,
+    // so this is just an extra safety measure
+    return getPool<typename std::remove_const<ComponentType>::type>(false).get(entityId);
 }
 
 template <typename ComponentType>
 void World::removeComponent(EntityId entityId) {
+    std::lock_guard lock(mMutex);
     getPool<ComponentType>().remove(entityId);
 }
 
