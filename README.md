@@ -114,7 +114,7 @@ struct PositionComponent {
     float x, y;
 }
 ```
-For components that are used by a almost all entities, a block size close to the maximum number of entities should be chosen, because a minimal amount of memory is wasted and cache is used effectively. For components that are only used by a very small number of entities, a block size close to 1 should be used to minimize wasteful memory usage.
+For components that are used by a almost all entities, a block size close to the maximum number of entities should be chosen (holes should be few, cache misses at block boundaries are minimal). For components that are only used by a very small number of entities, a block size close to 1 should be used (every component access will most likely be a cache miss, but it won't happen a lot, because we don't iterate over many components and we only take up the space we actually need).
 
 This is an insightful (though somewhat broken - images are missing for me) article about data structures for component storage: http://t-machine.org/index.php/2014/03/08/data-structures-for-entity-systems-contiguous-memory/
 
@@ -128,4 +128,5 @@ I will recap the ones I listed above:
 And add:
 
 * Make an actual game with this (very important)
-* I suspect adding a component in a system that is not part of the function signature will mess up systems that do have it in the function signature, because they might end up running in parallel, even though the first system actually essentially writes to that component, the other one accesses. This might be a big deal. One option is to invalidate components or have a separate component mask that is edited during the tick and only applied at the end (does not work for removal).
+* Creating/joining threads for each call to `World::tickSystem` might be expensive. I should compare it with a thread pool.
+* I suspect adding a component/removing in a system that is not part of the function signature will mess up systems that do have it in the function signature, because they might end up running in parallel, even though the first system actually essentially writes to that component, the other one accesses. This might be a big deal. One option is to invalidate components or have a separate component mask that is edited during the tick and only applied at the end (does not work for removal). For component removal this problem could be solved by deferring entity/component to the end of the frame as well.
