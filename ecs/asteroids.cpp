@@ -105,12 +105,6 @@ void physicsIntegrationSystem(float dt, const glm::vec2& winSize, CTransform& tr
     if(transform.position.y > winSize.y) transform.position.y -= winSize.y;
 }
 
-void drawOffset(sf::RenderWindow& window, const sf::Drawable& drawable, float x, float y) {
-    sf::Transform t;
-    t.translate(x, y);
-    window.draw(drawable, t);
-}
-
 template <typename DrawableType>
 void renderSystem(sf::RenderWindow& window, const glm::vec2& winSize, CRender<DrawableType>& render, const CTransform& transform) {
     DrawableType& drawable = render.drawable;
@@ -120,11 +114,24 @@ void renderSystem(sf::RenderWindow& window, const glm::vec2& winSize, CRender<Dr
 
     window.draw(drawable);
 
+    auto drawOffset = [&window, &drawable](float x, float y) {
+        window.draw(drawable, sf::Transform().translate(x, y));
+    };
+
     const auto bBox = drawable.getGlobalBounds();
-    if(bBox.left < 0) drawOffset(window, drawable, winSize.x, 0.f);
-    if(bBox.top < 0) drawOffset(window, drawable, 0.f, winSize.y);
-    if(bBox.left + bBox.width > winSize.x) drawOffset(window, drawable, -winSize.x, 0.f);
-    if(bBox.top + bBox.height > winSize.y) drawOffset(window, drawable, 0.f, -winSize.y);
+    const auto topLeft = glm::vec2(bBox.left, bBox.top);
+    const auto botRight = glm::vec2(bBox.left + bBox.width, bBox.top + bBox.height);
+    const auto topRight = glm::vec2(botRight.x, topLeft.y);
+    const auto botLeft = glm::vec2(topLeft.x, botRight.y);
+    if(topLeft.x < 0) drawOffset(winSize.x, 0.f);
+    if(topLeft.y < 0) drawOffset(0.f, winSize.y);
+    if(botRight.x > winSize.x) drawOffset(-winSize.x, 0.f);
+    if(botRight.y > winSize.y) drawOffset(0.f, -winSize.y);
+    // diagonals
+    if(topLeft.x < 0 && topLeft.y < 0) drawOffset(winSize.x, winSize.y);
+    if(topLeft.x < 0 && botLeft.y > winSize.y) drawOffset(winSize.x, -winSize.y);
+    if(botRight.x > winSize.x && topRight.y < 0) drawOffset(-winSize.x, winSize.y);
+    if(botRight.x > winSize.x && botRight.y > winSize.y) drawOffset(-winSize.x, -winSize.y);
 }
 
 const auto shipSize = 25.f;
@@ -151,7 +158,7 @@ int main(int argc, char** argv) {
     ship.add<CRender<sf::CircleShape>>(shipSize, 3).drawable.setOrigin(shipSize, shipSize);
     ship.add<CFlyController>(std::make_unique<KeyboardFlyController>(), shipRotSpeed, shipAccel);
 
-    for(int i = 0; i < 10; ++i) {
+    for(int i = 0; i < 4; ++i) {
         auto asteroid = world.createEntity();
         asteroid.add<CTransform>(randf(0.f, winSizef.x), randf(0.f, winSizef.y), randf(0.f, 2.f * glm::pi<float>()));
         const auto angle = randf(0.f, 2.f * glm::pi<float>());
