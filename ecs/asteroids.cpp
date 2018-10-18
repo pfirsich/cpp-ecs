@@ -21,15 +21,15 @@ constexpr float bool2Float(bool v, float min = 0.f, float max = 1.f) {
     return v ? max : min;
 }
 
-struct BaseFlyController {
-    virtual ~BaseFlyController() = default;
+struct BaseController {
+    virtual ~BaseController() = default;
     virtual float thrust() const = 0; // [0, 1]
     virtual float steer() const = 0; // [-1, 1]
     virtual bool shoot() const = 0;
 };
 
-struct KeyboardFlyController : public BaseFlyController {
-    ~KeyboardFlyController() = default;
+struct KeyboardController : public BaseController {
+    ~KeyboardController() = default;
 
     float thrust() const override {
         return bool2Float(sf::Keyboard::isKeyPressed(sf::Keyboard::Up));
@@ -72,20 +72,23 @@ struct CRender {
     template <typename... Args> CRender(Args... args) : drawable(std::forward<Args>(args)...) {}
 };
 
-struct CFlyController {
-    std::unique_ptr<BaseFlyController> controller;
-    float rotationSpeed, acceleration;
-    CFlyController(std::unique_ptr<BaseFlyController> controller, float rotationSpeed, float acceleration)
-        : controller(std::move(controller)), rotationSpeed(rotationSpeed), acceleration(acceleration) {}
+struct CController {
+    std::unique_ptr<BaseController> controller;
+    CController(std::unique_ptr<BaseController> controller) : controller(std::move(controller)) {}
 };
 
-void flyControlSystem(float dt, const CFlyController& controller, CTransform& transform, CVelocity& velocity) {
+struct CFlight {
+    float rotationSpeed, acceleration;
+    CFlight(float rotationSpeed, float acceleration) : rotationSpeed(rotationSpeed), acceleration(acceleration) {}
+};
+
+void flightSystem(float dt, const CController& controller, const CFlight& flight, CTransform& transform, CVelocity& velocity) {
     const auto ctrl = controller.controller.get();
 
-    transform.angle += ctrl->steer() * controller.rotationSpeed * dt;
+    transform.angle += ctrl->steer() * flight.rotationSpeed * dt;
 
     const auto shipDir = glm::vec2(std::cos(transform.angle), std::sin(transform.angle));
-    velocity.value += shipDir * ctrl->thrust() * controller.acceleration * dt;
+    velocity.value += shipDir * ctrl->thrust() * flight.acceleration * dt;
 }
 
 void maxSpeedSystem(CVelocity& velocity, const CMaxSpeed& maxSpeed) {
@@ -156,7 +159,8 @@ int main(int argc, char** argv) {
     ship.add<CMaxSpeed>(shipMaxSpeed);
     ship.add<CFriction>(shipFriction);
     ship.add<CRender<sf::CircleShape>>(shipSize, 3).drawable.setOrigin(shipSize, shipSize);
-    ship.add<CFlyController>(std::make_unique<KeyboardFlyController>(), shipRotSpeed, shipAccel);
+    ship.add<CController>(std::make_unique<KeyboardController>());
+    ship.add<CFlight>(shipRotSpeed, shipAccel);
 
     for(int i = 0; i < 4; ++i) {
         auto asteroid = world.createEntity();
@@ -182,7 +186,7 @@ int main(int argc, char** argv) {
         // update
         const auto dt = dtClock.restart().asSeconds();
 
-        world.tickSystem<const CFlyController, CTransform, CVelocity>(false, false, flyControlSystem, dt);
+        world.tickSystem<const CController, const CFlight, CTransform, CVelocity>(false, false, flightSystem, dt);
         world.tickSystem<CVelocity, const CMaxSpeed>(false, true, maxSpeedSystem);
         world.tickSystem<CVelocity, const CFriction>(false, true, frictionSystem, dt);
         world.tickSystem<CTransform, const CVelocity>(false, true, physicsIntegrationSystem, dt, winSizef);
