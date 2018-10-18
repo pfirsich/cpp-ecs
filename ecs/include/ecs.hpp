@@ -115,7 +115,7 @@ template <typename ComponentType>
 template <typename... Args>
 ComponentType& ComponentPool<ComponentType>::add(EntityId entityId, Args... args) {
     assert(!has(entityId));
-    auto [blockIndex, componentIndex] = getIndices(entityId);
+    const auto [blockIndex, componentIndex] = getIndices(entityId);
 
     if(mBlocks.size() < blockIndex + 1) mBlocks.resize(blockIndex + 1);
     auto& block = mBlocks[blockIndex];
@@ -128,21 +128,21 @@ ComponentType& ComponentPool<ComponentType>::add(EntityId entityId, Args... args
 
 template <typename ComponentType>
 bool ComponentPool<ComponentType>::has(EntityId entityId) const {
-    auto [blockIndex, componentIndex] = getIndices(entityId);
+    const auto [blockIndex, componentIndex] = getIndices(entityId);
     return mBlocks.size() > blockIndex && mBlocks[blockIndex].occupied[componentIndex];
 }
 
 template <typename ComponentType>
 ComponentType& ComponentPool<ComponentType>::get(EntityId entityId) {
     assert(has(entityId));
-    auto [blockIndex, componentIndex] = getIndices(entityId);
+    const auto [blockIndex, componentIndex] = getIndices(entityId);
     return *getPointer(blockIndex, componentIndex);
 }
 
 template <typename ComponentType>
 void ComponentPool<ComponentType>::remove(EntityId entityId) {
     assert(has(entityId));
-    auto [blockIndex, componentIndex] = getIndices(entityId);
+    const auto [blockIndex, componentIndex] = getIndices(entityId);
     auto component = getPointer(blockIndex, componentIndex);
     component->~ComponentType();
     mBlocks[blockIndex].occupied[componentIndex] = false;
@@ -391,8 +391,8 @@ void World::tickSystem(bool async, bool parallelFor, FuncType tickFunc, FuncArgs
     static_assert(!(... || std::is_reference<Components>::value), "Component types must not be references");
     //static_assert(std::is_same<FuncType, void(*)(FuncArgs..., Components&...)>::value, "Tick function has invalid signature");
 
-    auto readMask = constFilteredComponentMask<true, Components...>();
-    auto writeMask = constFilteredComponentMask<false, Components...>();
+    const auto readMask = constFilteredComponentMask<true, Components...>();
+    const auto writeMask = constFilteredComponentMask<false, Components...>();
     assert((readMask | writeMask) == componentMask<Components...>());
     waitForSystems(readMask, writeMask);
 
