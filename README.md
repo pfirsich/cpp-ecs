@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
     }
 }
 ```
-Currently the components have to passed to `World::tickSystem` explicitely as template parameters and they can not be deduced from the function that is passed to `World::tickSystem`. I think to make the deduction possible, I would have to add template specializations for various types of function-like objects (member functions, function pointers, functors, etc.), but I have not come to an agreement with myself about whether I like the explicitness it currently has.
+Currently the components have to passed to `World::tickSystem` explicitely as template parameters and they can not be deduced from the function that is passed to `World::tickSystem`. I have not yet found a way to make this deduction possible if I want to pass the additional parameters to tickSystem as well.
 
 A read and a write mask are built from the components that are passed as const or non-const template arguments respectively and `World::tickSystem` will wait for systems that write to the components the tick function wants to access until it executes the tick function.
 
@@ -121,7 +121,7 @@ This is an insightful (though somewhat broken - images are missing for me) artic
 ## Problems / ToDo
 I will recap the ones I listed above:
 
-* Deduce components from tick function type (maybe)
+* Deduce components from tick function type
 * Encode in the types whether systems create/destroy entities and whether systems consider entity interactions instead of passing two bools to `World::tickSystem`
 * Make a proof of concept of the event system as components/systems.
 
