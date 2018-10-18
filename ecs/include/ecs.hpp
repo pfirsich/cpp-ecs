@@ -409,7 +409,7 @@ void World::tickSystem(bool async, bool parallelFor, FuncType tickFunc, FuncArgs
     };
 
     if (async) {
-        auto system = new RunningSystem(readMask, writeMask);
+        auto system = std::make_unique<RunningSystem>(readMask, writeMask);
         system->thread = std::thread(tickAll);
 
         // I could make the lambda above a member function of World and do something like the following,
@@ -417,7 +417,7 @@ void World::tickSystem(bool async, bool parallelFor, FuncType tickFunc, FuncArgs
         //void (World::*threadFunc)(RunningSystem*, FuncType, FuncArgs...) = &systemThreadFunction<Components..., FuncArgs..., FuncType>;
         //system->thread = std::thread(threadFunc, this, system, tickFunc, funcArgs...);
 
-        mRunningSystems.emplace_back(system);
+        mRunningSystems.emplace_back(std::move(system));
     } else {
         tickAll();
     }
