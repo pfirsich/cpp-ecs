@@ -443,8 +443,12 @@ bool EntityHandle::has() const {
     return mWorld.hasComponents<Args...>(mId);
 }
 
-template <typename ComponentType>
+template <typename ComponentType, bool addIfNotPresent>
 ComponentType& EntityHandle::get() {
+    if constexpr(addIfNotPresent) {
+        static_assert(std::is_default_constructible<ComponentType>(), "Component type must be default constructible.");
+        if(!mWorld.hasComponents<ComponentType>(mId)) mWorld.addComponent<ComponentType>(mId);
+    }
     return mWorld.getComponent<ComponentType>(mId);
 }
 
