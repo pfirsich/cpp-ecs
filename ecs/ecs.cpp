@@ -79,6 +79,11 @@ bool World::hasComponents(EntityId entityId, ComponentMask mask) const {
     return (mComponentMasks[entityId] & mask) == mask;
 }
 
+ComponentMask World::getComponentMask(EntityId entityId) const {
+    assert(mComponentMasks.size() > entityId);
+    return mComponentMasks[entityId];
+}
+
 void World::waitForSystems(ComponentMask readMask, ComponentMask writeMask) {
     for (auto& system : mRunningSystems) {
         // if a running system writes to a component we want to read from or write to, wait until it is finished
@@ -97,7 +102,6 @@ void World::joinSystemThreads() {
     for (auto& system : mRunningSystems) system->thread.join();
     mRunningSystems.clear();
 }
-
 
 // EntityHandle implementation
 void EntityHandle::destroy() {

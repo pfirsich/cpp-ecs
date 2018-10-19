@@ -228,6 +228,8 @@ public:
     template <typename... Args>
     bool hasComponents(EntityId entityId) const;
 
+    ComponentMask getComponentMask(EntityId entityId) const;
+
     template <typename ComponentType>
     ComponentType& getComponent(EntityId entityId);
 
@@ -302,11 +304,17 @@ public:
     template <typename... Args>
     bool has() const;
 
-    template <typename ComponentType>
+    template <typename ComponentType, bool addIfNotPresent = false>
     ComponentType& get();
 
     template <typename ComponentType>
     void remove();
+
+    // has any components = "exists"
+    operator bool() const { return mWorld.getComponentMask(mId) > 0; }
+
+    bool operator==(const EntityHandle& other) { return &mWorld == &other.mWorld && mId == other.mId; }
+    bool operator!=(const EntityHandle& other) { return !(*this == other); }
 
     EntityId getId() const { return mId; }
     World& getWorld() const { return mWorld; }
