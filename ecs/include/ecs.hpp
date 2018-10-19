@@ -399,16 +399,29 @@ void World::forEachEntity(FuncType func, ExPo executionPolicy) {
 template <typename... Components, typename... FuncArgs, typename FuncType>
 void World::tickSystem(bool async, bool parallelFor, FuncType tickFunc, FuncArgs&&... funcArgs) {
     static_assert(!(... || std::is_reference<Components>::value), "Component types must not be references");
-    //static_assert(std::is_same<FuncType, void(*)(FuncArgs..., Components&...)>::value, "Tick function has invalid signature");
+    static constexpr auto funcValid = std::is_invocable_r<void, FuncType, FuncArgs..., Components&...>::value;
+    static constexpr auto funcValidWithEntityHandle = std::is_invocable_r<void, FuncType, EntityHandle, FuncArgs..., Components&...>::value;
+    static_assert(funcValid || funcValidWithEntityHandle, "Tick function has invalid signature");
 
     const auto readMask = constFilteredComponentMask<true, Components...>();
     const auto writeMask = constFilteredComponentMask<false, Components...>();
     assert((readMask | writeMask) == componentMask<Components...>());
     waitForSystems(readMask, writeMask);
 
-    auto tickEntity = [tickFunc, &funcArgs...](EntityHandle e) {
-        tickFunc(std::forward<FuncArgs>(funcArgs)..., e.get<Components>()...);
-    };
+    // When you use `if constexpr` in lambdas, MSVC will just roll over dead and do all kinds of crazy things (gcc and clang are fine though)
+    // therefore I need to use std::function here. When this is fixed, I can just move the if constexpr into the lambda.
+    // It seems a simplified version of this generates the same code on clang and way slower code on gcc (https://godbolt.org/z/QAhhx8)
+    // On MSVC I can not measure any performance difference to before adding the `funcValidWithEntityHandle` feature.
+    std::function<void(EntityHandle)> tickEntity;
+    if constexpr(funcValidWithEntityHandle) {
+        tickEntity = [tickFunc, &funcArgs...](EntityHandle e) {
+            tickFunc(e, std::forward<FuncArgs>(funcArgs)..., e.get<Components>()...);
+        };
+    } else {
+        tickEntity = [tickFunc, &funcArgs...](EntityHandle e) {
+            tickFunc(std::forward<FuncArgs>(funcArgs)..., e.get<Components>()...);
+        };
+    }
 
     auto tickAll = [this, parallelFor, tickEntity]() {
         if(parallelFor) {
