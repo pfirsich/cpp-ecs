@@ -50,19 +50,19 @@ EntityHandle World::createEntity() {
 }
 
 EntityHandle World::getEntityHandle(EntityId entityId) {
-    assert(entityId < mComponentMasks.size()); // entity exists
+    assert(entityId < mComponentMasks.size()); // entity has existed
     return EntityHandle(*this, entityId);
 }
 
 void World::destroyEntity(EntityId entityId) {
     std::lock_guard lock(mMutex);
     assert(mComponentMasks.size() >= entityId); // entity exists
-    mEntityIdFreeList.push(entityId);
-    mComponentMasks[entityId] = 0;
     for(size_t compId = 0; compId < mPools.size(); ++compId) {
         const auto hasComponent = (mComponentMasks[entityId] & (1ull << compId)) > 0;
         if(mPools[compId] && hasComponent) mPools[compId]->remove(entityId);
     }
+    mComponentMasks[entityId] = 0;
+    mEntityIdFreeList.push(entityId);
 }
 
 void World::flush() {
