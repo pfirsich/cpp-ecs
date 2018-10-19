@@ -176,7 +176,7 @@ private:
         using reference = EntityHandle&;
         using difference_type = std::ptrdiff_t;
 
-        EntityIterator() : mList(nullptr), mEntityIndex(0) {}
+        EntityIterator() : mList(nullptr), mEntityIndex(MAX_INDEX) {} // singular iterator
         EntityIterator(const EntityIterator& other) = default;
         EntityIterator& operator=(const EntityIterator& other) = default;
 
@@ -201,7 +201,9 @@ private:
         ~EntityList() = default;
 
         EntityIterator begin() {
-            return EntityIterator(this, 0);
+            // start at -1 and increment to get an invalid iterator if no entity matches
+            // is this hackish?
+            return ++EntityIterator(this, -1);
         }
 
         EntityIterator end() {
