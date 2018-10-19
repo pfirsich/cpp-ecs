@@ -4,10 +4,11 @@ namespace ecs {
 
 World::EntityIterator& World::EntityIterator::operator++() {
     mEntityIndex++;
-    while (mEntityIndex < mList->world.getEntityCount()
-           && mList->world.isValid(mEntityIndex)
-           && !mList->world.hasComponents(mEntityIndex, mList->mask)) mEntityIndex++;
-    if(mEntityIndex >= mList->world.getEntityCount()) {
+    const auto& world = mList->world;
+    while (mEntityIndex < world.getEntityCount()
+           && (!world.isValid(mEntityIndex)
+           || !world.hasComponents(mEntityIndex, mList->mask))) mEntityIndex++;
+    if(mEntityIndex >= world.getEntityCount()) {
         mEntityIndex = MAX_INDEX;
     }
     return *this;
